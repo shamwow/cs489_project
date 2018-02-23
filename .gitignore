@@ -1,0 +1,7 @@
+__pycache__/
+MNIST-data/
+TRAIN/
+TEST/
+.DS_Store
+*.p
+cnn_model/

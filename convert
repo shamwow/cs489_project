@@ -1,0 +1,12 @@
+#!/bin/bash
+
+set -e
+
+for f in $(echo TEST/**/**/*.WAV); do
+    echo "Converting ${f}";
+    sph2pipe -f wav $f "${f}shahmeer";
+    rm $f;
+    mv "${f}shahmeer" $f;
+done
+
+
