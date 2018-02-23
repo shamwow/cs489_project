@@ -1,5 +1,5 @@
 import glob
-import matplotlib
+# import matplotlib
 import numpy as np
 import os
 import pickle
@@ -10,8 +10,8 @@ from scipy.io import wavfile
 
 from chunked_file_obj import ChunkedFileObj
 
-matplotlib.use("TkAgg")
-import matplotlib.pyplot as plt
+# matplotlib.use("TkAgg")
+# import matplotlib.pyplot as plt
 
 tf.logging.set_verbosity(tf.logging.INFO)
 
