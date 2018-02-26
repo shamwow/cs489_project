@@ -4,4 +4,5 @@ TRAIN/
 TEST/
 .DS_Store
 *.p
+*.pyc
 cnn_model*/

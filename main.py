@@ -323,13 +323,6 @@ def train(phone):
     assert(not np.any(np.isnan(training_data)))
     assert(not np.any(np.isnan(training_labels)))
 
-    print(training_labels.shape, training_data.shape)
-
-    print(
-        "Percent zeros:",
-        float((training_labels == 0).sum()) / len(training_labels),
-    )
-
     print("Starting training")
 
     tensors_to_log = {
@@ -362,7 +355,7 @@ def train(phone):
         hooks=[logging_hook],
     )
 
-def test_complete():
+def complete_test():
     if not os.path.isfile(FORMATTED_TESTING):
         print("Formatting testing data")
         format_raw_data(FORMATTED_TESTING, TESTING_FILES)
@@ -413,13 +406,6 @@ def test(phone):
     testing_data, testing_labels = load_preformatted_data(
         FORMATTED_TESTING, TESTING_FILES)
 
-    print(
-        "Percent zeros:",
-        float((testing_labels == 0).sum()) / len(testing_labels),
-    )
-
-    print(testing_labels.shape, testing_data.shape)
-
     phone_id = PHONE_SET_USED[phone]
     indices = np.where(testing_labels == phone_id)[0]
     testing_labels[np.arange(0, len(testing_labels))] = 0
@@ -436,3 +422,7 @@ def test(phone):
     )
     eval_results = classifier.evaluate(input_fn=eval_input_fn)
     print(eval_results)
+
+def train_all():
+    for phone in PHONE_SET_USED:
+        train(phone)
