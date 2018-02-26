@@ -4,4 +4,4 @@ TRAIN/
 TEST/
 .DS_Store
 *.p
-cnn_model/
+cnn_model*/

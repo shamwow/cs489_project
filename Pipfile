@@ -16,6 +16,7 @@ numpy = "*"
 matplotlib = "*"
 setuptools = "*"
 tensorflow = "*"
+python-speech-features = "*"
 
 
 [requires]
