@@ -226,14 +226,9 @@ def create_model(features, labels, mode):
         activation=tf.nn.relu,
         name="conv",
     )
-    tf.summary.histogram("conv1_histogram", conv1)
     pool1 = tf.layers.max_pooling2d(
         inputs=conv1, pool_size=[1, 6], strides=2, name="pool")
-    tf.summary.histogram("pool1_histogram", pool1)
-
     flattened = tf.reshape(pool1, [-1, 1 * 18 * 150], name="flattened")
-    tf.summary.histogram("flattened_histogram", flattened)
-
     dense1 = tf.layers.dense(
         inputs=flattened,
         units=100,
@@ -252,14 +247,8 @@ def create_model(features, labels, mode):
         training=mode == tf.estimator.ModeKeys.TRAIN,
         name="dropout"
     )
-
-    tf.summary.histogram("dense1_histogram", dense1)
-    tf.summary.histogram("dropout_histogram", dropout)
-    tf.summary.histogram("dense2_histogram", dense2)
-
     logits = tf.layers.dense(
         inputs=dropout, units=2, name="logits")
-
     predictions = {
         # Generate predictions (for PREDICT and EVAL mode)
         "classes": tf.argmax(input=logits, axis=1),
@@ -477,7 +466,3 @@ def tune(phone):
 def tune_all():
     for phone in PHONE_SET:
         tune(phone)
-
-
-complete_test()
-
