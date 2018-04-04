@@ -4,15 +4,10 @@ import os
 import pickle
 import python_speech_features as psf
 import tensorflow as tf
+from fast_predict import FastPredict
 from math import ceil, floor
 from scipy import signal
 from scipy.io import wavfile
-
-from chunked_file_obj import ChunkedFileObj
-
-# import matplotlib
-# matplotlib.use("TkAgg")
-# import matplotlib.pyplot as plt
 
 tf.logging.set_verbosity(tf.logging.INFO)
 
@@ -26,10 +21,11 @@ MAX_FRAMES_PER_FILE = 1000
 FILTER_BANK_COUNT = 40
 NFFT = 512
 CHANNEL_COUNT = 3
-FORMATTED_TRAINING = "formatted_training_non_zero.p"
-FORMATTED_TESTING = "formatted_testing_non_zero.p"
+FORMATTED_TRAINING = "formatted_training.p"
+FORMATTED_TESTING = "formatted_testing.p"
 TESTING_FILES = "TEST/**/**/*.WAV"
 FILES = "TRAIN/**/**/*.WAV"
+ACCURACY_MAP_FILE = "accuracy_map.p"
 
 LIMITED_PHONE_SET = {'h#': 0, 'w': 1, 'ix': 2, 's': 3, 'ah': 4, 'ch': 5,
 'n': 6, 'ae': 7, 't': 8, 'v': 9, 'r': 10, 'f': 11, 'y': 12, 'zh': 13,
@@ -48,10 +44,8 @@ PHONE_SET = {
 'hh': 57, 'th': 58,
 'dcl': 3, 'tcl': 6, 'kcl': 10, 'bcl': 19, 'epi': 25, 'gcl': 33,  'ax-h': 47,
 'pau': 39, 'pcl': 45, 'eng': 60, 'em': 59, 'en': 52, 'nx': 24, 'ux': 16,
-'el': 18, 'q': 44, 'hv': 54,
+'el': 18, 'q': 44, 'hv': 54
 }
-
-PHONE_SET_USED = LIMITED_PHONE_SET
 
 assert(FRAME_SIZE >= FRAME_STRIDE)
 
@@ -75,9 +69,8 @@ def get_spectrogram_data(wfile):
         winstep=FRAME_STRIDE_SECS,
         winlen=FRAME_SIZE_SECS,
     )
-    data = mean_normalize(data)
-    delta_data = mean_normalize(psf.delta(data, 2))
-    delta_delta_data = mean_normalize(psf.delta(delta_data, 2))
+    delta_data = psf.delta(data, 2)
+    delta_delta_data = psf.delta(delta_data, 2)
 
     assert(len(data) == get_frames_count(len(wfile)))
 
@@ -87,8 +80,7 @@ def get_spectrogram_data(wfile):
     return np.moveaxis(complete_data, 0, 2)
 
 def format_training_data(file: str, training_data):
-    """Formats raw timit data to be a mapping of frame to phone. Also removes
-    frames from original data.
+    """Formats raw timit data to be a mapping of frame to phone.
 
     Returns tuple: (array of phones, removed frame indices).
     """
@@ -101,23 +93,23 @@ def format_training_data(file: str, training_data):
             phoneme = phoneme.replace("\n", "")
             assert(phoneme in PHONE_SET)
 
-            if phoneme not in PHONE_SET_USED:
+            if phoneme not in PHONE_SET:
                 continue
 
-            phoneme_id = PHONE_SET_USED[phoneme]
+            phoneme_id = PHONE_SET[phoneme]
 
             start_idx = get_frames_count(int(start) + 1) - 1
             end_idx = get_frames_count(int(end)) - 1
             assert(end_idx < len(training_data))
             indices = np.arange(start_idx, end_idx + 1)
 
-            # Remove 1 frame from each end to focus only on main part of
-            # phone. If the phone only takes up 1 or two frames, ignore it.
-            if len(indices) <= 2:
-                continue
+            # # Remove 1 frame from each end to focus only on main part of
+            # # phone. If the phone only takes up 1 or two frames, ignore it.
+            # if len(indices) <= 2:
+            #     continue
 
-            assert(len(indices) > 2)
-            indices = indices[1:-1]
+            # assert(len(indices) > 2)
+            # indices = indices[1:-1]
 
             answer[indices] = np.full(len(indices), phoneme_id)
 
@@ -225,7 +217,7 @@ def dense_layer(inp, input_dim, neurons, name):
 def create_model(features, labels, mode):
     input_layer = tf.reshape(
         features["x"], [-1, 1, FILTER_BANK_COUNT, CHANNEL_COUNT])
-    # Convolutional Layer #1
+    # Convolutional Layer
     conv1 = tf.layers.conv2d(
         inputs=input_layer,
         filters=150,
@@ -278,7 +270,13 @@ def create_model(features, labels, mode):
     }
 
     if mode == tf.estimator.ModeKeys.PREDICT:
-        return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
+        return tf.estimator.EstimatorSpec(
+            mode=mode,
+            predictions=predictions,
+            export_outputs={
+                "output": tf.estimator.export.PredictOutput(predictions),
+            },
+        )
 
     tf.identity(labels, name="label_tensor")
 
@@ -334,10 +332,23 @@ def train(phone):
     logging_hook = tf.train.LoggingTensorHook(
         tensors=tensors_to_log, every_n_iter=100)
 
-    phone_id = PHONE_SET_USED[phone]
-    indices = np.where(training_labels == phone_id)[0]
+    phone_id = PHONE_SET[phone]
+    positive_indices = np.where(training_labels == phone_id)[0]
+    negative_indices = np.where(training_labels != phone_id)[0]
     training_labels[np.arange(0, len(training_labels))] = 0
-    training_labels[indices] = 1
+    training_labels[positive_indices] = 1
+    np.random.shuffle(negative_indices)
+
+    # Remove negative indices so that ~25% of the data has negative labels.
+    diff = len(negative_indices) - floor(len(positive_indices) * 1.0/3.0)
+    if diff > 0:
+        np.random.shuffle(negative_indices)
+        remove = negative_indices[:diff]
+        training_labels = np.delete(training_labels, remove, axis=0)
+        training_data = np.delete(training_data, remove, axis=0)
+
+    assert(training_labels.sum() == ceil(len(training_labels) * .75))
+    assert(len(training_labels) == len(training_data))
 
     classifier = tf.estimator.Estimator(
         model_fn=create_model, model_dir="cnn_model_" + phone)
@@ -365,36 +376,44 @@ def complete_test():
     testing_data, testing_labels = load_preformatted_data(
         FORMATTED_TESTING, TESTING_FILES)
 
-    predictions = np.full(len(testing_labels), -1, dtype=np.int64)
-    probs = np.full(len(testing_labels), 0, dtype=np.float32)
-    for phone in PHONE_SET_USED:
+    classifiers = {}
+    for phone in PHONE_SET:
         classifier = tf.estimator.Estimator(
             model_fn=create_model, model_dir="cnn_model_" + phone)
+        print(classifier.get_variable_names())
+        classifiers[phone] = FastPredict(classifier)
 
-        input_fn = tf.estimator.inputs.numpy_input_fn(
-            x={"x": testing_data},
-            num_epochs=1,
-            shuffle=False,
-        )
-        gen = classifier.predict(input_fn=input_fn)
-        i = 0
-        guessed = 0
-        for prediction in gen:
-            is_not_phone, is_phone = prediction["probabilities"]
-            klass = prediction["classes"]
-            if klass == 1:
-                guessed += 1
-                probs[i] = is_phone
-                predictions[i] = PHONE_SET_USED[phone]
-            i += 1
+    accuracy_map = None
+    with open(ACCURACY_MAP_FILE, "rb") as fileobj:
+        accuracy_map = pickle.load(fileobj)
 
-        print("Guessed this iteration: ", guessed)
-        print("Total guessed", (predictions != -1).sum())
-        print("Total correct", (predictions == testing_labels).sum())
+    total_guessed = 0
+    total_correct = 0
+    for i, (data, label) in enumerate(zip(testing_data, testing_labels)):
+        max_certainty = 0
+        predicted_phone = None
+        for phone in PHONE_SET:
+            input_features = {"x": np.array([data])}
+            prediction = classifiers[phone].predict(input_features)[0]
+            is_phone = prediction["classes"] == 1
+            _, certainty = prediction["probabilities"]
 
-    correct = (predictions == testing_labels).sum()
+            stats = accuracy_map[phone]
+            normalized = certainty * stats["accuracy"] - stats["loss"]
 
-    print("Accuracy:", float(correct) / len(testing_labels))
+            if is_phone and normalized > max_certainty:
+                predicted_phone = phone
+                max_certainty = normalized
+
+        if predicted_phone is not None:
+            total_correct += int(PHONE_SET[predicted_phone] == label)
+            total_guessed += 1
+
+        if i % 1000 == 0:
+            print("Total guessed", total_guessed)
+            print("Total correct", total_correct)
+
+    print("Accuracy:", float(total_correct) / len(testing_labels))
 
 def test(phone):
     if not os.path.isfile(FORMATTED_TESTING):
@@ -406,10 +425,20 @@ def test(phone):
     testing_data, testing_labels = load_preformatted_data(
         FORMATTED_TESTING, TESTING_FILES)
 
-    phone_id = PHONE_SET_USED[phone]
-    indices = np.where(testing_labels == phone_id)[0]
+    phone_id = PHONE_SET[phone]
+    negative_indices = np.where(testing_labels != phone_id)[0]
+    positive_indices = np.where(testing_labels == phone_id)[0]
     testing_labels[np.arange(0, len(testing_labels))] = 0
-    testing_labels[indices] = 1
+    testing_labels[positive_indices] = 1
+
+    # Remove negative indices so the number of positive and negative indices
+    # is the same.
+    diff = len(negative_indices) - len(positive_indices)
+    if diff > 0:
+        np.random.shuffle(negative_indices)
+        remove = negative_indices[:diff]
+        testing_labels = np.delete(testing_labels, remove, axis=0)
+        testing_data = np.delete(testing_data, remove, axis=0)
 
     classifier = tf.estimator.Estimator(
         model_fn=create_model, model_dir="cnn_model_" + phone)
@@ -422,7 +451,33 @@ def test(phone):
     )
     eval_results = classifier.evaluate(input_fn=eval_input_fn)
     print(eval_results)
+    return eval_results
 
 def train_all():
-    for phone in PHONE_SET_USED:
+    for phone in PHONE_SET:
         train(phone)
+
+def test_all():
+    for phone in PHONE_SET:
+        test(phone)
+
+def tune(phone):
+    accuracy_map = None
+    with open(ACCURACY_MAP_FILE, "rb") as fileobj:
+        accuracy_map = pickle.load(fileobj)
+
+    while accuracy_map[phone]["accuracy"] < .75:
+        print("Tuning", phone)
+        train(phone)
+        res = test(phone)
+        accuracy_map[phone] = res
+        with open(ACCURACY_MAP_FILE, "wb") as fileobj:
+            pickle.dump(accuracy_map, fileobj)
+
+def tune_all():
+    for phone in PHONE_SET:
+        tune(phone)
+
+
+complete_test()
+
